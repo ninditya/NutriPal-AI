@@ -9,9 +9,6 @@ export function useUser() {
   return { user, isUserLoading, userError: null }
 }
 
-export function useAuth() {
-  return { signOut: () => supabase.auth.signOut() }
-}
 
 export function useProfile(userId: string | null | undefined) {
   const [data, setData] = useState<any | null>(null)

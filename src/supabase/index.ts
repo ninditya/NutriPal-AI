@@ -2,7 +2,6 @@ export { supabase } from './client'
 export { SupabaseProvider } from './provider'
 export {
   useUser,
-  useAuth,
   useProfile,
   useDailyLog,
   useMeals,
