@@ -30,10 +30,8 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { useUser, useFirestore, useDoc, useMemoFirebase } from "@/firebase"
-import { doc, collection, serverTimestamp } from "firebase/firestore"
+import { useUser, useProfile, upsertDailyLog, addMealNonBlocking } from "@/supabase"
 import { format, addDays, subDays, startOfToday } from "date-fns"
-import { setDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase/non-blocking-updates"
 import { useToast } from "@/hooks/use-toast"
 import { curateMealSuggestions } from "@/ai/flows/curate-meal-suggestions"
 import { generateDailyPlan } from "@/ai/flows/generate-daily-plan"
@@ -135,10 +133,8 @@ export default function ExplorePage() {
   const [pantryRecipeTiming, setPantryRecipeTiming] = useState("Lunch");
 
   const { user } = useUser()
-  const firestore = useFirestore()
 
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const { data: profile } = useDoc(profileRef)
+  const { data: profile } = useProfile(user?.uid)
 
   const handleCurateDelivery = async () => {
     if (!profile) return;
@@ -217,17 +213,14 @@ export default function ExplorePage() {
   }
 
   const handleOrderNow = async (item: any, source: 'delivery' | 'menu') => {
-    if (!user || !firestore) return
+    if (!user) return
     const dateId = format(new Date(), "yyyy-MM-dd")
-    
-    let finalTime = item.time || format(new Date(), "hh:mm a").toUpperCase()
-    
-    const dailyLogRef = doc(firestore, "users", user.uid, "dailyLogs", dateId)
-    const mealsColRef = collection(dailyLogRef, "meals")
-    
-    setDocumentNonBlocking(dailyLogRef, { date: dateId }, { merge: true })
 
-    addDocumentNonBlocking(mealsColRef, {
+    let finalTime = item.time || format(new Date(), "hh:mm a").toUpperCase()
+
+    upsertDailyLog(user.uid, dateId, {})
+
+    addMealNonBlocking(user.uid, dateId, {
       name: item.name,
       calories: item.calories,
       time: finalTime,
@@ -239,7 +232,6 @@ export default function ExplorePage() {
       ingredients: item.ingredients || [],
       instructions: item.instructions || [],
       status: "planned",
-      createdAt: serverTimestamp()
     })
 
     if (source === 'delivery') {
@@ -259,16 +251,14 @@ export default function ExplorePage() {
   }
 
   const handleRequestCookBuddy = (meal: any) => {
-    if (!user || !firestore) return;
+    if (!user) return;
     const dateId = targetDate || format(new Date(), "yyyy-MM-dd");
-    const dailyLogRef = doc(firestore, "users", user.uid, "dailyLogs", dateId);
-    const mealsColRef = collection(dailyLogRef, "meals");
-    
-    setDocumentNonBlocking(dailyLogRef, { date: dateId }, { merge: true });
+
+    upsertDailyLog(user.uid, dateId, {});
 
     const finalTime = meal.time || "12:00 PM";
 
-    addDocumentNonBlocking(mealsColRef, {
+    addMealNonBlocking(user.uid, dateId, {
       name: meal.name,
       calories: meal.calories,
       time: finalTime,
@@ -280,7 +270,6 @@ export default function ExplorePage() {
       ingredients: meal.ingredients || [],
       instructions: ["Professionally prepared and delivered by CookBuddy."],
       status: "planned",
-      createdAt: serverTimestamp()
     });
 
     toast({
@@ -292,12 +281,10 @@ export default function ExplorePage() {
   };
 
   const handleAddAll = async (isRecovery = false) => {
-    if (!user || !firestore || !menuPlan) return;
+    if (!user || !menuPlan) return;
     const dateId = targetDate || format(new Date(), "yyyy-MM-dd");
-    const dailyLogRef = doc(firestore, "users", user.uid, "dailyLogs", dateId);
-    const mealsColRef = collection(dailyLogRef, "meals");
-    
-    setDocumentNonBlocking(dailyLogRef, { date: dateId }, { merge: true });
+
+    upsertDailyLog(user.uid, dateId, {});
 
     const types = ["breakfast", "lunch", "dinner"] as const;
     types.forEach(type => {
@@ -306,7 +293,7 @@ export default function ExplorePage() {
       const item = isSwapped ? baseMeal.swapSuggestion : baseMeal;
       const finalTime = item.time || baseMeal.time || "12:00 PM";
 
-      addDocumentNonBlocking(mealsColRef, {
+      addMealNonBlocking(user.uid, dateId, {
         name: item.name,
         calories: item.calories,
         time: finalTime,
@@ -318,7 +305,6 @@ export default function ExplorePage() {
         ingredients: item.ingredients || [],
         instructions: item.instructions || [],
         status: "planned",
-        createdAt: serverTimestamp()
       });
     });
 
@@ -328,7 +314,7 @@ export default function ExplorePage() {
   }
 
   const handleAddPantryRecipeToPlan = async (mealName: string) => {
-    if (!user || !firestore || !profile) {
+    if (!user || !profile) {
       toast({ variant: "destructive", title: "Error", description: "You must be logged in to do that." });
       return;
     }
@@ -345,15 +331,13 @@ export default function ExplorePage() {
       });
 
       const dateId = targetDate || format(new Date(), "yyyy-MM-dd");
-      const dailyLogRef = doc(firestore, "users", user.uid, "dailyLogs", dateId);
-      const mealsColRef = collection(dailyLogRef, "meals");
-    
-      setDocumentNonBlocking(dailyLogRef, { date: dateId }, { merge: true });
-      
+
+      upsertDailyLog(user.uid, dateId, {});
+
       const selectedTiming = TIMING_OPTIONS.find(t => t.value === pantryRecipeTiming);
       const finalTime = selectedTiming?.defaultTime || "12:00 PM";
 
-      addDocumentNonBlocking(mealsColRef, {
+      addMealNonBlocking(user.uid, dateId, {
         name: mealName,
         calories: analysis.calories,
         time: finalTime,
@@ -368,7 +352,6 @@ export default function ExplorePage() {
         allergenWarning: analysis.allergenWarning || "",
         reminderEnabled: true,
         status: "planned",
-        createdAt: serverTimestamp(),
       });
 
       toast({

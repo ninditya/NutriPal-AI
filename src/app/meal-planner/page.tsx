@@ -25,9 +25,7 @@ import {
 } from "lucide-react"
 import { format, addDays, subDays, startOfToday } from "date-fns"
 import Link from "next/link"
-import { useUser, useFirestore, useDoc, useMemoFirebase, useCollection } from "@/firebase"
-import { doc, collection, serverTimestamp, increment } from "firebase/firestore"
-import { setDocumentNonBlocking, addDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from "@/firebase/non-blocking-updates"
+import { useUser, useProfile, useMeals, addMealNonBlocking, updateMealNonBlocking, deleteMealNonBlocking, incrementDailyLog } from "@/supabase"
 import { cn } from "@/lib/utils"
 import {
   Dialog,
@@ -106,7 +104,6 @@ export default function MealPlannerPage() {
   const [activeRecipeName, setActiveRecipeName] = useState("")
 
   const { user } = useUser()
-  const firestore = useFirestore()
 
   useEffect(() => {
     const today = startOfToday()
@@ -115,13 +112,9 @@ export default function MealPlannerPage() {
   }, [])
 
   const dateId = date ? format(date, "yyyy-MM-dd") : ""
-  
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const dailyLogRef = useMemoFirebase(() => (user && dateId) ? doc(firestore, "users", user.uid, "dailyLogs", dateId) : null, [user, firestore, dateId])
-  const mealsColRef = useMemoFirebase(() => (user && dateId) ? collection(firestore, "users", user.uid, "dailyLogs", dateId, "meals") : null, [user, firestore, dateId])
 
-  const { data: profile } = useDoc(profileRef)
-  const { data: scheduledMeals, isLoading: isLoadingMeals } = useCollection(mealsColRef)
+  const { data: profile } = useProfile(user?.uid)
+  const { data: scheduledMeals, isLoading: isLoadingMeals } = useMeals(user?.uid, dateId)
 
   const sortedMeals = useMemo(() => {
     if (!scheduledMeals) return null;
@@ -146,7 +139,7 @@ export default function MealPlannerPage() {
   const handleToday = () => setDate(startOfToday())
 
   const handleSaveMeal = async () => {
-    if (!user || !mealsColRef || !mealName || !dailyLogRef) return
+    if (!user || !mealName || !dateId) return
     setIsSaving(true)
     
     try {
@@ -202,14 +195,13 @@ export default function MealPlannerPage() {
         source: editingMealId ? (scheduledMeals?.find(m => m.id === editingMealId)?.source || "planner") : "planner",
         reminderEnabled,
         status: editingMealId ? (scheduledMeals?.find(m => m.id === editingMealId)?.status || "planned") : "planned",
-        updatedAt: serverTimestamp()
       }
 
       if (editingMealId) {
-        updateDocumentNonBlocking(doc(mealsColRef, editingMealId), mealData);
+        updateMealNonBlocking(editingMealId, mealData);
         toast({ title: "Schedule Updated", description: "Changes synced." })
       } else {
-        addDocumentNonBlocking(mealsColRef, { ...mealData, createdAt: serverTimestamp() });
+        addMealNonBlocking(user.uid, dateId, mealData);
         toast({ title: "Meal Scheduled", description: `${mealName} added.` })
       }
       resetForm()
@@ -252,8 +244,8 @@ export default function MealPlannerPage() {
   }
 
   const handleDeleteMeal = async (meal: any) => {
-    if (!user || !mealsColRef) return
-    deleteDocumentNonBlocking(doc(mealsColRef, meal.id));
+    if (!user) return
+    deleteMealNonBlocking(meal.id);
     toast({ variant: "destructive", title: "Meal Removed", description: `${meal.name} taken off schedule.` })
   }
 
@@ -273,18 +265,17 @@ export default function MealPlannerPage() {
   }
 
   const markAsConsumed = (recipe: any) => {
-    if (!user || !mealsColRef || !dailyLogRef) return
-    
-    updateDocumentNonBlocking(doc(mealsColRef, recipe.id), { status: 'consumed', updatedAt: serverTimestamp() });
-    
-    setDocumentNonBlocking(dailyLogRef, {
-      date: dateId,
-      caloriesConsumed: increment(recipe.calories),
-      proteinTotal: increment(recipe.macros?.protein || 0),
-      carbsTotal: increment(recipe.macros?.carbs || 0),
-      fatTotal: increment(recipe.macros?.fat || 0)
-    }, { merge: true });
-    
+    if (!user || !dateId) return
+
+    updateMealNonBlocking(recipe.id, { status: 'consumed' });
+
+    incrementDailyLog(user.uid, dateId, {
+      caloriesConsumed: recipe.calories,
+      proteinTotal: recipe.macros?.protein || 0,
+      carbsTotal: recipe.macros?.carbs || 0,
+      fatTotal: recipe.macros?.fat || 0
+    });
+
     setIsRecipeDialogOpen(false);
     toast({ title: "Bon Appétit!", description: "Meal marked as consumed." });
   }

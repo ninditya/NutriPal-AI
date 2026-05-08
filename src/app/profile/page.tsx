@@ -2,10 +2,9 @@
 "use client"
 
 import { useState, useEffect, useMemo } from "react"
-import { useUser, useAuth, useFirestore, useDoc, useMemoFirebase } from "@/firebase"
-import { signOut } from "firebase/auth"
+import { useUser, useProfile, upsertProfile } from "@/supabase"
+import { supabase } from "@/supabase"
 import { useRouter } from "next/navigation"
-import { doc, serverTimestamp } from "firebase/firestore"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -45,7 +44,6 @@ import {
   DialogFooter
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
-import { updateDocumentNonBlocking } from "@/firebase/non-blocking-updates"
 import { useToast } from "@/hooks/use-toast"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts"
@@ -53,13 +51,10 @@ import { format, subDays } from "date-fns"
 
 export default function ProfilePage() {
   const { user } = useUser()
-  const auth = useAuth()
-  const firestore = useFirestore()
   const router = useRouter()
   const { toast } = useToast()
 
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const { data: profile } = useDoc(profileRef)
+  const { data: profile } = useProfile(user?.uid)
 
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -148,12 +143,12 @@ export default function ProfilePage() {
   }
 
   const handleLogout = async () => {
-    await signOut(auth)
+    await supabase.auth.signOut()
     router.push("/login")
   }
 
   const handleUpdateProfile = async () => {
-    if (!user || !profileRef || !gender) return
+    if (!user || !gender) return
     setLoading(true)
     try {
       const w = parseFloat(weight)
@@ -161,7 +156,7 @@ export default function ProfilePage() {
       const a = parseInt(age)
       const calorieTarget = calculateCalorieTarget(w, h, a, gender as "male" | "female", category)
 
-      updateDocumentNonBlocking(profileRef, {
+      await upsertProfile(user.uid, {
         gender,
         age: a,
         weight: w,
@@ -172,7 +167,9 @@ export default function ProfilePage() {
         allergies,
         calorieTarget,
         notificationsEnabled: notifs,
-        updatedAt: serverTimestamp()
+        proteinTarget: profile?.proteinTarget || 30,
+        carbsTarget: profile?.carbsTarget || 40,
+        fatTarget: profile?.fatTarget || 30,
       })
       toast({ title: "Profile Updated", description: "Health metrics have been synced." })
       setIsEditDialogOpen(false)

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
-import { FirebaseClientProvider } from '@/firebase/client-provider';
+import { SupabaseProvider } from '@/supabase';
 import { AppLayout } from '@/components/AppLayout';
 import { Toaster } from '@/components/ui/toaster';
 
@@ -22,10 +22,10 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
       </head>
       <body className="font-body antialiased bg-background text-foreground overflow-x-hidden selection:bg-primary/20">
-        <FirebaseClientProvider>
+        <SupabaseProvider>
           <AppLayout>{children}</AppLayout>
           <Toaster />
-        </FirebaseClientProvider>
+        </SupabaseProvider>
       </body>
     </html>
   );

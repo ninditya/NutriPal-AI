@@ -3,13 +3,13 @@
 
 import { useState, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
-import { useFirestore, useUser, useCollection, useDoc, useMemoFirebase } from "@/firebase"
+import { useUser, useProfile, useDailyLog, useMeals, useDailyLogs, upsertDailyLog, incrementDailyLog, updateMealNonBlocking, deleteMealNonBlocking, addMealNonBlocking } from "@/supabase"
 import { Card, CardContent } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
-import { 
-  Flame, 
-  Droplets, 
+import {
+  Flame,
+  Droplets,
   Utensils,
   Loader2,
   Plus,
@@ -30,8 +30,6 @@ import {
   Bike
 } from "lucide-react"
 import { format, startOfToday, subDays, addDays } from "date-fns"
-import { collection, doc, query, orderBy, limit, serverTimestamp, increment } from "firebase/firestore"
-import { setDocumentNonBlocking, updateDocumentNonBlocking, deleteDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase/non-blocking-updates"
 import { cn } from "@/lib/utils"
 import Image from "next/image"
 import {
@@ -62,12 +60,11 @@ const MACRO_COLORS = {
 
 export default function Dashboard() {
   const router = useRouter()
-  const firestore = useFirestore()
   const { user, isUserLoading } = useUser()
   const [mounted, setMounted] = useState(false)
   const [today, setToday] = useState<Date | null>(null)
   const [expandedMealId, setExpandedMealId] = useState<string | null>(null)
-  
+
   const [isEatNowOpen, setIsEatNowOpen] = useState(false)
   const [selectedMealForEatNow, setSelectedMealForEatNow] = useState<any | null>(null)
 
@@ -95,29 +92,16 @@ export default function Dashboard() {
 
   const dateId = today ? format(today, "yyyy-MM-dd") : ""
 
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const dailyLogRef = useMemoFirebase(() => (user && dateId) ? doc(firestore, "users", user.uid, "dailyLogs", dateId) : null, [user, firestore, dateId])
-  const mealsColRef = useMemoFirebase(() => (user && dateId) ? collection(firestore, "users", user.uid, "dailyLogs", dateId, "meals") : null, [user, firestore, dateId])
-  
-  const logsQuery = useMemoFirebase(() => {
-    if (!user) return null;
-    return query(
-      collection(firestore, "users", user.uid, "dailyLogs"),
-      orderBy("date", "desc"),
-      limit(14)
-    );
-  }, [user, firestore]);
-
-  const { data: profile } = useDoc(profileRef)
-  const { data: dailyLog, isLoading: isDailyLogLoading } = useDoc(dailyLogRef)
-  const { data: meals } = useCollection(mealsColRef)
-  const { data: recentLogs } = useCollection(logsQuery)
+  const { data: profile } = useProfile(user?.uid)
+  const { data: dailyLog, isLoading: isDailyLogLoading } = useDailyLog(user?.uid, dateId)
+  const { data: meals } = useMeals(user?.uid, dateId)
+  const { data: recentLogs } = useDailyLogs(user?.uid, 14)
 
   useEffect(() => {
-    if (dailyLogRef && !isDailyLogLoading && (!dailyLog || !dailyLog.caloriesBurned)) {
-      setDocumentNonBlocking(dailyLogRef, { caloriesBurned: 800, date: dateId }, { merge: true });
+    if (user && dateId && !isDailyLogLoading && (!dailyLog || !dailyLog.caloriesBurned)) {
+      upsertDailyLog(user.uid, dateId, { caloriesBurned: 800 })
     }
-  }, [isDailyLogLoading, dailyLog, dailyLogRef, dateId]);
+  }, [isDailyLogLoading, dailyLog, user, dateId]);
 
   const caloriesBurned = dailyLog?.caloriesBurned || 0;
   const wasHighlyActive = caloriesBurned > 700;
@@ -155,12 +139,10 @@ export default function Dashboard() {
   }
 
   const handleAcceptRecoveryPlan = async () => {
-    if (!user || !firestore || !recoveryPlan || !today) return;
+    if (!user || !recoveryPlan || !today) return;
     const targetDate = format(addDays(today, 1), "yyyy-MM-dd");
-    const dailyLogRefForTarget = doc(firestore, "users", user.uid, "dailyLogs", targetDate);
-    const mealsColRefForTarget = collection(dailyLogRefForTarget, "meals");
-    
-    setDocumentNonBlocking(dailyLogRefForTarget, { date: targetDate }, { merge: true });
+
+    upsertDailyLog(user.uid, targetDate, {})
 
     const types = ["breakfast", "lunch", "dinner"] as const;
     types.forEach(type => {
@@ -169,7 +151,7 @@ export default function Dashboard() {
       const item = isSwapped ? baseMeal.swapSuggestion : baseMeal;
       const finalTime = item.time || baseMeal.time || "12:00 PM";
 
-      addDocumentNonBlocking(mealsColRefForTarget, {
+      addMealNonBlocking(user.uid, targetDate, {
         name: item.name,
         calories: item.calories,
         time: finalTime,
@@ -181,7 +163,6 @@ export default function Dashboard() {
         ingredients: item.ingredients || [],
         instructions: item.instructions || [],
         status: "planned",
-        createdAt: serverTimestamp()
       });
     });
 
@@ -238,9 +219,9 @@ export default function Dashboard() {
   const fatPercent = totalMacrosKcal > 0 ? Math.max(0, 100 - proteinPercent - carbsPercent) : 0;
 
   const adjustWater = (amount: number) => {
-    if (!dailyLogRef || !dateId) return;
+    if (!user || !dateId) return;
     const newWater = Math.max(0, water + amount);
-    setDocumentNonBlocking(dailyLogRef, { waterIntake: Number(newWater.toFixed(1)), date: dateId }, { merge: true });
+    upsertDailyLog(user.uid, dateId, { waterIntake: Number(newWater.toFixed(1)) })
   }
 
   const handleEatNowClick = (meal: any) => {
@@ -249,18 +230,17 @@ export default function Dashboard() {
   }
 
   const markAsConsumedJustEat = () => {
-    if (!user || !mealsColRef || !dailyLogRef || !selectedMealForEatNow) return
+    if (!user || !selectedMealForEatNow) return
     const meal = selectedMealForEatNow;
-    
-    setDocumentNonBlocking(dailyLogRef, {
-      date: dateId,
-      caloriesConsumed: increment(meal.calories),
-      proteinTotal: increment(meal.macros?.protein || 0),
-      carbsTotal: increment(meal.macros?.carbs || 0),
-      fatTotal: increment(meal.macros?.fat || 0)
-    }, { merge: true });
-    
-    updateDocumentNonBlocking(doc(mealsColRef, meal.id), { status: "consumed", updatedAt: serverTimestamp() });
+
+    incrementDailyLog(user.uid, dateId, {
+      caloriesConsumed: meal.calories,
+      proteinTotal: meal.macros?.protein || 0,
+      carbsTotal: meal.macros?.carbs || 0,
+      fatTotal: meal.macros?.fat || 0,
+    })
+
+    updateMealNonBlocking(meal.id, { status: "consumed" })
     toast({ title: "Bon Appétit!", description: `${meal.name} marked as eaten.` });
     setIsEatNowOpen(false)
   }
@@ -271,8 +251,8 @@ export default function Dashboard() {
   }
 
   const handleDropMeal = (meal: any) => {
-    if (!user || !mealsColRef) return;
-    deleteDocumentNonBlocking(doc(mealsColRef, meal.id));
+    if (!user) return;
+    deleteMealNonBlocking(meal.id);
     toast({ variant: "destructive", title: "Meal Dropped", description: `${meal.name} removed.` });
   };
 

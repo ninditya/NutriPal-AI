@@ -5,7 +5,7 @@ import React from 'react';
 import { usePathname } from 'next/navigation';
 import { Navbar } from '@/components/Navbar';
 import { cn } from '@/lib/utils';
-import { useUser } from '@/firebase';
+import { useUser } from '@/supabase';
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

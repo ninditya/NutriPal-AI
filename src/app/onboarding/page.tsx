@@ -7,15 +7,13 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useFirestore, useUser } from "@/firebase"
-import { doc, setDoc } from "firebase/firestore"
+import { useUser, upsertProfile, setUserOnboarded } from "@/supabase"
 import { Loader2, Calculator, Scale, Ruler, Heart, User, Calendar } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 
 export default function OnboardingPage() {
-  const firestore = useFirestore()
   const { user } = useUser()
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -60,10 +58,9 @@ export default function OnboardingPage() {
       const w = parseFloat(weight)
       const h = parseFloat(height)
       const a = parseInt(age)
-      
       const calorieTarget = calculateCalorieTarget(w, h, a, gender, category)
 
-      const profileData = {
+      await upsertProfile(user.uid, {
         gender,
         age: a,
         weight: w,
@@ -76,86 +73,38 @@ export default function OnboardingPage() {
         proteinTarget: 30,
         carbsTarget: 40,
         fatTarget: 30,
-        onboardedAt: new Date().toISOString()
-      }
-      
-      await setDoc(doc(firestore, "users", user.uid), { 
-        onboarded: true, 
-        email: user.email 
-      }, { merge: true })
-      
-      await setDoc(doc(firestore, "users", user.uid, "profile", "main"), profileData)
+        onboardedAt: new Date().toISOString(),
+      })
+
+      await setUserOnboarded(user.uid, true)
       router.push("/")
-    } catch (e) {
-      console.error(e)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="max-w-lg mx-auto p-4 md:py-6 space-y-4 animate-in fade-in duration-700">
-      <header className="text-center space-y-1">
-        <h1 className="text-4xl font-black tracking-tighter text-foreground uppercase">Personalize</h1>
-        <p className="text-[9px] font-black text-foreground uppercase tracking-[0.4em] opacity-40">Bio-Metric Integration</p>
+    <div className="max-w-2xl mx-auto px-4 py-10 space-y-6 pb-24 min-h-screen">
+      <header className="text-center space-y-1 pt-safe">
+        <h1 className="text-4xl font-black tracking-tighter text-foreground uppercase">Setup Profile</h1>
+        <p className="text-[10px] font-black text-foreground uppercase tracking-widest opacity-40">Health Calibration</p>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Card className="border-none shadow-premium rounded-[2rem] overflow-hidden flex flex-col justify-center bg-white min-h-[140px]">
-          <CardContent className="p-5 space-y-4">
-            <Label className="text-[10px] font-black uppercase tracking-widest text-foreground flex items-center gap-2">
-              <User className="w-3 h-3 text-primary" /> Biological Sex
-            </Label>
-            <RadioGroup 
-              value={gender} 
-              onValueChange={(val) => setGender(val as "male" | "female")} 
-              className="flex gap-2"
-            >
-              <Label
-                htmlFor="male"
-                className={cn(
-                  "flex-1 flex flex-col items-center justify-center rounded-xl border-2 border-muted bg-popover p-3 hover:bg-secondary cursor-pointer transition-all",
-                  gender === "male" ? "border-primary bg-primary/5" : ""
-                )}
-              >
-                <RadioGroupItem value="male" id="male" className="sr-only" />
-                <span className="text-xl mb-1">👨</span>
-                <span className="font-black uppercase text-[8px] tracking-widest">Male</span>
-              </Label>
-              <Label
-                htmlFor="female"
-                className={cn(
-                  "flex-1 flex flex-col items-center justify-center rounded-xl border-2 border-muted bg-popover p-3 hover:bg-secondary cursor-pointer transition-all",
-                  gender === "female" ? "border-primary bg-primary/5" : ""
-                )}
-              >
-                <RadioGroupItem value="female" id="female" className="sr-only" />
-                <span className="text-xl mb-1">👩</span>
-                <span className="font-black uppercase text-[8px] tracking-widest">Female</span>
-              </Label>
-            </RadioGroup>
-          </CardContent>
-        </Card>
-
-        <Card className="border-none shadow-premium rounded-[2rem] overflow-hidden bg-primary/5 flex flex-col justify-center min-h-[140px]">
-          <CardContent className="p-5 flex flex-col items-center justify-center text-center space-y-1">
-            {bmi ? (
-              <div className="animate-in zoom-in duration-300 space-y-1">
-                <p className="text-[9px] font-black uppercase tracking-widest text-foreground opacity-60">BMI SCORE</p>
-                <p className="text-4xl font-black text-primary tracking-tighter">{bmi.toFixed(1)}</p>
-                <Badge className="bg-primary text-foreground font-black px-3 py-0.5 rounded-lg uppercase text-[8px] tracking-widest border-none">
-                  {category}
-                </Badge>
+      <Card className="border-none shadow-premium rounded-[2.5rem] overflow-hidden bg-white">
+        <CardContent className="p-6 space-y-5">
+          <Label className="text-[10px] font-black uppercase tracking-widest text-foreground flex items-center gap-2">
+            <User className="w-3 h-3 text-primary" /> Biological Sex
+          </Label>
+          <RadioGroup value={gender} onValueChange={(v) => setGender(v as "male" | "female")} className="grid grid-cols-2 gap-3">
+            {[{ value: "male", label: "Male" }, { value: "female", label: "Female" }].map(g => (
+              <div key={g.value} className={cn("flex items-center gap-3 p-4 rounded-2xl border-2 cursor-pointer transition-all", gender === g.value ? "border-primary bg-primary/5" : "border-border")}>
+                <RadioGroupItem value={g.value} id={g.value} className="hidden" />
+                <Label htmlFor={g.value} className="cursor-pointer font-black text-[10px] uppercase tracking-widest">{g.label}</Label>
               </div>
-            ) : (
-              <div className="opacity-20 flex flex-col items-center">
-                <Calculator className="w-8 h-8 mb-2" />
-                <p className="text-[8px] font-black uppercase tracking-widest text-foreground">Awaiting Data</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            ))}
+          </RadioGroup>
+        </CardContent>
+      </Card>
 
       <Card className="border-none shadow-premium rounded-[2.5rem] overflow-hidden bg-white">
         <CardContent className="p-6 space-y-5">
@@ -185,6 +134,12 @@ export default function OnboardingPage() {
               </div>
             </div>
           </div>
+          {bmi && (
+            <div className="p-3 bg-primary/5 rounded-xl border border-primary/10 text-center">
+              <p className="text-[8px] font-black uppercase tracking-widest opacity-40">BMI</p>
+              <p className="text-xl font-black text-foreground">{bmi.toFixed(1)} <span className="text-xs opacity-40">{category}</span></p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -198,9 +153,9 @@ export default function OnboardingPage() {
           <div className="grid grid-cols-2 gap-2">
             {["Diabetes", "Hypertension", "Vegetarian", "Gluten-free"].map(res => (
               <div key={res} className="flex items-center space-x-2.5 p-3 bg-secondary/20 rounded-xl border border-transparent hover:border-border transition-all cursor-pointer">
-                <Checkbox 
-                  id={res} 
-                  checked={restrictions.includes(res)} 
+                <Checkbox
+                  id={res}
+                  checked={restrictions.includes(res)}
                   className="rounded-md h-4 w-4 border-2 border-primary/20 data-[state=checked]:bg-primary"
                   onCheckedChange={(checked) => {
                     if (checked) setRestrictions([...restrictions, res])
@@ -213,19 +168,19 @@ export default function OnboardingPage() {
           </div>
           <div className="space-y-1.5">
             <Label className="text-[8px] font-black uppercase tracking-widest text-muted-foreground ml-1">Food Allergies</Label>
-            <Input 
-              value={allergies} 
-              onChange={e => setAllergies(e.target.value)} 
-              placeholder="e.g. Peanuts, Shellfish..." 
+            <Input
+              value={allergies}
+              onChange={e => setAllergies(e.target.value)}
+              placeholder="e.g. Peanuts, Shellfish..."
               className="h-10 rounded-xl border-border bg-secondary/20 font-black text-xs"
             />
           </div>
         </CardContent>
       </Card>
 
-      <Button 
-        onClick={handleFinish} 
-        disabled={loading || !weight || !height || !gender || !age} 
+      <Button
+        onClick={handleFinish}
+        disabled={loading || !weight || !height || !gender || !age}
         className="w-full h-14 text-xs font-black uppercase tracking-widest rounded-[1.5rem] shadow-premium bg-primary text-foreground border-none transition-all active:scale-[0.98]"
       >
         {loading ? <Loader2 className="animate-spin mr-3 h-4 w-4" /> : null}

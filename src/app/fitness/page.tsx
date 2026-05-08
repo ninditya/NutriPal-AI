@@ -22,10 +22,8 @@ import {
 } from "lucide-react"
 import { Bar, BarChart, XAxis, YAxis, ResponsiveContainer, CartesianGrid, Tooltip } from "recharts"
 import { useToast } from "@/hooks/use-toast"
-import { useFirestore, useUser, useCollection, useDoc, useMemoFirebase } from "@/firebase"
+import { useUser, useProfile, useDailyLog, useDailyLogs, upsertDailyLog, addMealNonBlocking } from "@/supabase"
 import { format, startOfToday, subDays, addDays } from "date-fns"
-import { collection, doc, query, orderBy, limit, serverTimestamp } from "firebase/firestore"
-import { setDocumentNonBlocking, addDocumentNonBlocking } from "@/firebase/non-blocking-updates"
 import { generateDailyPlan } from "@/ai/flows/generate-daily-plan"
 import {
   Dialog,
@@ -45,7 +43,6 @@ export default function FitnessPage() {
   const { toast } = useToast()
 
   const { user } = useUser()
-  const firestore = useFirestore()
   const [today, setToday] = useState<Date | null>(null)
 
   const [isRecoveryDialogOpen, setIsRecoveryDialogOpen] = useState(false)
@@ -64,28 +61,15 @@ export default function FitnessPage() {
 
   const dateId = today ? format(today, "yyyy-MM-dd") : ""
 
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const dailyLogRef = useMemoFirebase(() => (user && dateId) ? doc(firestore, "users", user.uid, "dailyLogs", dateId) : null, [user, firestore, dateId])
-  
-  const logsQuery = useMemoFirebase(() => {
-    if (!user) return null;
-    return query(
-      collection(firestore, "users", user.uid, "dailyLogs"),
-      orderBy("date", "desc"),
-      limit(7)
-    );
-  }, [user, firestore]);
-
-  const { data: profile } = useDoc(profileRef)
-  const { data: dailyLog, isLoading: isDailyLogLoading } = useDoc(dailyLogRef)
-  const { data: recentLogs } = useCollection(logsQuery)
+  const { data: profile } = useProfile(user?.uid)
+  const { data: dailyLog, isLoading: isDailyLogLoading } = useDailyLog(user?.uid, dateId)
+  const { data: recentLogs } = useDailyLogs(user?.uid, 7)
 
   useEffect(() => {
-    if (dailyLogRef && !isDailyLogLoading && (!dailyLog || !dailyLog.caloriesBurned)) {
-      // If there's no log for today after loading, or caloriesBurned is 0/missing, create a dummy one.
-      setDocumentNonBlocking(dailyLogRef, { caloriesBurned: 800, date: dateId }, { merge: true });
+    if (user && dateId && !isDailyLogLoading && (!dailyLog || !dailyLog.caloriesBurned)) {
+      upsertDailyLog(user.uid, dateId, { caloriesBurned: 800 });
     }
-  }, [isDailyLogLoading, dailyLog, dailyLogRef, dateId]);
+  }, [isDailyLogLoading, dailyLog, user, dateId]);
 
   const caloriesBurned = dailyLog?.caloriesBurned || 0;
   const wasHighlyActive = caloriesBurned > 700;
@@ -136,12 +120,10 @@ export default function FitnessPage() {
   }
 
   const handleAcceptRecoveryPlan = async () => {
-    if (!user || !firestore || !recoveryPlan || !today) return;
+    if (!user || !recoveryPlan || !today) return;
     const targetDate = format(addDays(today, 1), "yyyy-MM-dd");
-    const dailyLogRefForTarget = doc(firestore, "users", user.uid, "dailyLogs", targetDate);
-    const mealsColRefForTarget = collection(dailyLogRefForTarget, "meals");
-    
-    setDocumentNonBlocking(dailyLogRefForTarget, { date: targetDate }, { merge: true });
+
+    upsertDailyLog(user.uid, targetDate, {});
 
     const types = ["breakfast", "lunch", "dinner"] as const;
     types.forEach(type => {
@@ -150,7 +132,7 @@ export default function FitnessPage() {
       const item = isSwapped ? baseMeal.swapSuggestion : baseMeal;
       const finalTime = item.time || baseMeal.time || "12:00 PM";
 
-      addDocumentNonBlocking(mealsColRefForTarget, {
+      addMealNonBlocking(user.uid, targetDate, {
         name: item.name,
         calories: item.calories,
         time: finalTime,
@@ -162,7 +144,6 @@ export default function FitnessPage() {
         ingredients: item.ingredients || [],
         instructions: item.instructions || [],
         status: "planned",
-        createdAt: serverTimestamp()
       });
     });
 
@@ -173,8 +154,8 @@ export default function FitnessPage() {
   const handleSync = () => {
     setSyncing(true)
     const simulatedBurn = 800;
-    if(dailyLogRef) {
-        setDocumentNonBlocking(dailyLogRef, { caloriesBurned: simulatedBurn, date: dateId }, { merge: true });
+    if (user && dateId) {
+      upsertDailyLog(user.uid, dateId, { caloriesBurned: simulatedBurn });
     }
     setTimeout(() => {
       setSyncing(false)

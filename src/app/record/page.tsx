@@ -20,8 +20,7 @@ import {
   List,
   RefreshCw,
 } from "lucide-react"
-import { useFirestore, useUser, useDoc, useMemoFirebase } from "@/firebase"
-import { doc, setDoc, increment, collection, serverTimestamp, updateDoc, getDoc } from "firebase/firestore"
+import { useUser, useProfile, upsertDailyLog, incrementDailyLog, addMeal, updateMealNonBlocking, getMealById } from "@/supabase"
 import { format } from "date-fns"
 import Image from "next/image"
 import { useToast } from "@/hooks/use-toast"
@@ -51,10 +50,7 @@ export default function RecordPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { user } = useUser()
-  const firestore = useFirestore()
-
-  const profileRef = useMemoFirebase(() => user ? doc(firestore, "users", user.uid, "profile", "main") : null, [user, firestore])
-  const { data: profile } = useDoc(profileRef)
+  const { data: profile } = useProfile(user?.uid)
 
   useEffect(() => {
     setMounted(true)
@@ -65,10 +61,9 @@ export default function RecordPage() {
 
   const fetchExistingMeal = async () => {
     if (!user || !updateId || !paramDateId) return
-    const mealRef = doc(firestore, "users", user.uid, "dailyLogs", paramDateId, "meals", updateId)
-    const snap = await getDoc(mealRef)
-    if (snap.exists()) {
-      setExistingMeal(snap.data())
+    const meal = await getMealById(updateId)
+    if (meal) {
+      setExistingMeal(meal)
       startCamera()
     }
   }
@@ -189,13 +184,11 @@ export default function RecordPage() {
 
   const handleSave = async () => {
     if (!user || !mounted || !preview) return
-    
-    // Skip analysis if we are updating an existing meal and just want to save the photo
     if (!updateId && !result) return
 
     let dateId = paramDateId || selectedDate || format(new Date(), "yyyy-MM-dd")
     let timeStr = format(new Date(), "hh:mm a").toUpperCase()
-    
+
     if (mode === "gallery" && selectedTime) {
       const [h, m] = selectedTime.split(':')
       const hour = parseInt(h)
@@ -203,53 +196,35 @@ export default function RecordPage() {
       const h12 = hour % 12 || 12
       timeStr = `${String(h12).padStart(2, '0')}:${m} ${ampm}`
     }
-    
-    const dailyLogRef = doc(firestore, "users", user.uid, "dailyLogs", dateId)
-    
+
     if (updateId) {
-      // Record consumption for an existing scheduled meal - JUST UPDATE IMAGE and status
-      const existingMealRef = doc(firestore, "users", user.uid, "dailyLogs", dateId, "meals", updateId);
-      
-      const updateData: any = {
-        imageUrl: preview,
-        status: "consumed" as const,
-        updatedAt: serverTimestamp()
-      };
-
-      // Only overwrite nutrient data if AI analysis was actually performed
+      const updateData: any = { imageUrl: preview, status: "consumed" as const }
       if (result) {
-        updateData.calories = result.calories;
-        updateData.macros = result.macros;
-        updateData.healthScore = result.healthScore;
-        updateData.expertInsight = result.expertInsight;
-        updateData.ingredients = result.ingredients;
-        updateData.allergenWarning = result.allergenWarning || "";
-        updateData.name = result.name;
+        updateData.calories = result.calories
+        updateData.macros = result.macros
+        updateData.healthScore = result.healthScore
+        updateData.expertInsight = result.expertInsight
+        updateData.ingredients = result.ingredients
+        updateData.allergenWarning = result.allergenWarning || ""
+        updateData.name = result.name
       }
+      updateMealNonBlocking(updateId, updateData)
 
-      await updateDoc(existingMealRef, updateData);
-      
-      // Update daily aggregates
-      const calToInc = result ? result.calories : (existingMeal?.calories || 0);
-      const protToInc = result ? result.macros.protein : (existingMeal?.macros?.protein || 0);
-      const carbToInc = result ? result.macros.carbs : (existingMeal?.macros?.carbs || 0);
-      const fatToInc = result ? result.macros.fat : (existingMeal?.macros?.fat || 0);
+      const calToInc = result ? result.calories : (existingMeal?.calories || 0)
+      const protToInc = result ? result.macros.protein : (existingMeal?.macros?.protein || 0)
+      const carbToInc = result ? result.macros.carbs : (existingMeal?.macros?.carbs || 0)
+      const fatToInc = result ? result.macros.fat : (existingMeal?.macros?.fat || 0)
 
-      await setDoc(dailyLogRef, { 
-        date: dateId, 
-        caloriesConsumed: increment(calToInc),
-        proteinTotal: increment(protToInc),
-        carbsTotal: increment(carbToInc),
-        fatTotal: increment(fatToInc)
-      }, { merge: true });
-
+      incrementDailyLog(user.uid, dateId, {
+        caloriesConsumed: calToInc,
+        proteinTotal: protToInc,
+        carbsTotal: carbToInc,
+        fatTotal: fatToInc,
+      })
       toast({ title: "Meal Updated", description: `Record synced with photo.` })
     } else {
-      // New meal log - needs AI results
-      if (!result) return;
-      const newMealRef = doc(collection(dailyLogRef, "meals"))
-      
-      const mealData = {
+      if (!result) return
+      await addMeal(user.uid, dateId, {
         name: result.name,
         calories: result.calories,
         time: timeStr,
@@ -260,21 +235,15 @@ export default function RecordPage() {
         ingredients: result.ingredients,
         expertInsight: result.expertInsight,
         allergenWarning: result.allergenWarning || "",
-        status: "consumed" as const,
-        imageUrl: preview, 
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
-      };
-
-      await setDoc(dailyLogRef, { 
-        date: dateId, 
-        caloriesConsumed: increment(result.calories),
-        proteinTotal: increment(result.macros.protein),
-        carbsTotal: increment(result.macros.carbs),
-        fatTotal: increment(result.macros.fat)
-      }, { merge: true });
-
-      await setDoc(newMealRef, mealData);
+        status: "consumed",
+        imageUrl: preview,
+      })
+      incrementDailyLog(user.uid, dateId, {
+        caloriesConsumed: result.calories,
+        proteinTotal: result.macros.protein,
+        carbsTotal: result.macros.carbs,
+        fatTotal: result.macros.fat,
+      })
       toast({ title: "Logged Successfully", description: `${result.name} recorded.` })
     }
 
